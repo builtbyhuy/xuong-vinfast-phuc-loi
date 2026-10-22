@@ -2,6 +2,8 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { DateTime } = require('luxon');
 const {
   normalizePlate,
   isValidVietnamPlate,
@@ -252,17 +254,31 @@ describe('confidenceLabel', () => {
 describe('ID generation', () => {
   it('tao ID dung format', () => {
     const tz = 'Asia/Ho_Chi_Minh';
-    assert.match(generateVehicleId(tz), /^LX-\d{12}-[A-F0-9]{4}$/);
-    assert.match(generateEventId(tz), /^SK-\d{12}-[A-F0-9]{4}$/);
-    assert.match(generateErrorId(tz), /^ERR-\d{12}-[A-F0-9]{4}$/);
+    assert.match(generateVehicleId(tz), /^LX-\d{12}-[A-F0-9]{32}$/);
+    assert.match(generateEventId(tz), /^SK-\d{12}-[A-F0-9]{32}$/);
+    assert.match(generateErrorId(tz), /^ERR-\d{12}-[A-F0-9]{32}$/);
   });
 
-  it('tao ID unique', () => {
-    const tz = 'Asia/Ho_Chi_Minh';
-    const ids = new Set();
-    for (let i = 0; i < 100; i++) {
-      ids.add(generateVehicleId(tz));
-    }
-    assert.equal(ids.size, 100);
-  });
+  for (const [prefix, generateId] of [
+    ['LX', generateVehicleId],
+    ['SK', generateEventId],
+    ['ERR', generateErrorId],
+  ]) {
+    it(`${prefix}: distinguishes same-second IDs when the first two random bytes repeat`, (t) => {
+      const fixedNow = DateTime.fromISO('2026-10-22T10:20:30+07:00');
+      t.mock.method(DateTime, 'now', () => fixedNow);
+      let sequence = 0;
+      t.mock.method(crypto, 'randomBytes', (size) => {
+        // Valid entropy samples share their first 16 bits but differ in the tail.
+        // Respect the requested size: the old two-byte generator loses the tail.
+        const sample = Buffer.from('A1B20000000000000000000000000000', 'hex');
+        sample.writeUInt32BE(sequence++, 12);
+        return sample.subarray(0, size);
+      });
+
+      const ids = Array.from({ length: 100 }, () => generateId('Asia/Ho_Chi_Minh'));
+      assert.equal(new Set(ids).size, 100);
+      assert.ok(ids.every(id => id.startsWith(`${prefix}-261022102030-`)));
+    });
+  }
 });
