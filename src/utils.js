@@ -7,24 +7,26 @@ const crypto = require('crypto');
 // ID Generation
 // ──────────────────────────────────────────────
 
-/** Ma luot xe: LX-YYMMDDHHmmss-XXXX */
+// Keep IDs opaque to consumers. A 128-bit suffix avoids the collision-prone
+// 16-bit space when several IDs are created in the same timestamp second.
+/** Ma luot xe: LX-YYMMDDHHmmss-<32 hex characters> */
 function generateVehicleId(tz) {
   const ts = DateTime.now().setZone(tz).toFormat('yyMMddHHmmss');
-  const rand = crypto.randomBytes(2).toString('hex').toUpperCase();
+  const rand = crypto.randomBytes(16).toString('hex').toUpperCase();
   return `LX-${ts}-${rand}`;
 }
 
-/** Ma su kien: SK-YYMMDDHHmmss-XXXX */
+/** Ma su kien: SK-YYMMDDHHmmss-<32 hex characters> */
 function generateEventId(tz) {
   const ts = DateTime.now().setZone(tz).toFormat('yyMMddHHmmss');
-  const rand = crypto.randomBytes(2).toString('hex').toUpperCase();
+  const rand = crypto.randomBytes(16).toString('hex').toUpperCase();
   return `SK-${ts}-${rand}`;
 }
 
-/** Ma loi: ERR-YYMMDDHHmmss-XXXX */
+/** Ma loi: ERR-YYMMDDHHmmss-<32 hex characters> */
 function generateErrorId(tz) {
   const ts = DateTime.now().setZone(tz).toFormat('yyMMddHHmmss');
-  const rand = crypto.randomBytes(2).toString('hex').toUpperCase();
+  const rand = crypto.randomBytes(16).toString('hex').toUpperCase();
   return `ERR-${ts}-${rand}`;
 }
 
