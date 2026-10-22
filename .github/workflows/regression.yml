@@ -76,7 +76,7 @@ jobs:
           python3 --version
           psql --version
           psql -X --set=ON_ERROR_STOP=1 --command='CREATE ROLE service_role;'
-          mkdir -p .ci-evidence
+          mkdir -p ci-evidence
 
       - name: Require the preserved baseline to reproduce the defect
         shell: bash
@@ -84,7 +84,7 @@ jobs:
           set +e
           python3 test/postgres-concurrency.py \
             --baseline-function test/fixtures/process-vehicle-before-plate-lock.sql \
-            --race-only --quiet --json .ci-evidence/baseline.json
+            --race-only --quiet --json ci-evidence/baseline.json
           baseline_status=$?
           set -e
           if [ "$baseline_status" -ne 1 ]; then
@@ -94,7 +94,7 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          report = json.loads(Path('.ci-evidence/baseline.json').read_text())
+          report = json.loads(Path('ci-evidence/baseline.json').read_text())
           assert report['pass'] is False
           rounds = report['firstEntryRace']['rounds']
           assert len(rounds) == 5
@@ -107,20 +107,20 @@ jobs:
       - name: Check the fixed fresh schema
         run: |
           python3 test/postgres-concurrency.py --quiet \
-            --json .ci-evidence/fixed-schema.json
+            --json ci-evidence/fixed-schema.json
 
       - name: Check the ordered migration path
         run: |
           python3 test/postgres-concurrency.py --upgrade --quiet \
-            --json .ci-evidence/fixed-upgrade.json
+            --json ci-evidence/fixed-upgrade.json
 
       - name: Reconcile the installed function and expected coverage
         run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
-          schema = json.loads(Path('.ci-evidence/fixed-schema.json').read_text())
-          upgrade = json.loads(Path('.ci-evidence/fixed-upgrade.json').read_text())
+          schema = json.loads(Path('ci-evidence/fixed-schema.json').read_text())
+          upgrade = json.loads(Path('ci-evidence/fixed-upgrade.json').read_text())
           required = ('firstEntryRace', 'serialSemantics', 'thresholdBoundary',
                       'differentPlates', 'rollbackReleasesLock', 'messageKeyConstraint')
           for report in (schema, upgrade):
@@ -136,6 +136,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vehicle-postgres-regression-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .ci-evidence/*.json
+          path: ci-evidence/*.json
           if-no-files-found: error
           retention-days: 90
