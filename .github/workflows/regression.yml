@@ -1,0 +1,141 @@
+name: Application and PostgreSQL regression
+
+on:
+  push:
+    branches:
+      - claude/vehicle-tracking-zalo-ocr-3ERhn
+  pull_request:
+    branches:
+      - claude/vehicle-tracking-zalo-ocr-3ERhn
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vehicle-regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  application:
+    name: Node.js application tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24.19.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+
+      - name: Install the locked dependency tree
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run the existing application suite
+        run: npm test
+
+  postgres:
+    name: Real PostgreSQL regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16.15-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+          # Disposable service credentials, never application credentials.
+          POSTGRES_PASSWORD: vehicle-regression-only
+        ports:
+          - 127.0.0.1:55439:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: '55439'
+      PGUSER: postgres
+      PGDATABASE: postgres
+      PGPASSWORD: vehicle-regression-only
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Prepare local PostgreSQL client and Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client-16 libpq5 python3
+          python3 --version
+          psql --version
+          psql -X --set=ON_ERROR_STOP=1 --command='CREATE ROLE service_role;'
+          mkdir -p ci-evidence
+
+      - name: Require the preserved baseline to reproduce the defect
+        shell: bash
+        run: |
+          set +e
+          python3 test/postgres-concurrency.py \
+            --baseline-function test/fixtures/process-vehicle-before-plate-lock.sql \
+            --race-only --quiet --json ci-evidence/baseline.json
+          baseline_status=$?
+          set -e
+          if [ "$baseline_status" -ne 1 ]; then
+            printf 'Expected baseline exit 1; observed %s\n' "$baseline_status" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('ci-evidence/baseline.json').read_text())
+          assert report['pass'] is False
+          rounds = report['firstEntryRace']['rounds']
+          assert len(rounds) == 5
+          for observation in rounds:
+              assert observation['activeRows'] == 2
+              assert [result[0] for result in observation['results']] == ['VAO', 'VAO']
+          print('Baseline reproduced: both calls create an active entry in all five rounds.')
+          PY
+
+      - name: Check the fixed fresh schema
+        run: |
+          python3 test/postgres-concurrency.py --quiet \
+            --json ci-evidence/fixed-schema.json
+
+      - name: Check the ordered migration path
+        run: |
+          python3 test/postgres-concurrency.py --upgrade --quiet \
+            --json ci-evidence/fixed-upgrade.json
+
+      - name: Reconcile the installed function and expected coverage
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          schema = json.loads(Path('ci-evidence/fixed-schema.json').read_text())
+          upgrade = json.loads(Path('ci-evidence/fixed-upgrade.json').read_text())
+          required = ('firstEntryRace', 'serialSemantics', 'thresholdBoundary',
+                      'differentPlates', 'rollbackReleasesLock', 'messageKeyConstraint')
+          for report in (schema, upgrade):
+              assert report['pass'] is True
+              assert all(report[key]['pass'] is True for key in required)
+          assert upgrade['legacyFiveArgumentRace']['pass'] is True
+          assert schema['installedFunctionSha256'] == upgrade['installedFunctionSha256']
+          print('Fresh schema and migration install the same checked function.')
+          PY
+
+      - name: Preserve PostgreSQL JSON evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vehicle-postgres-regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-evidence/*.json
+          if-no-files-found: error
+          retention-days: 90

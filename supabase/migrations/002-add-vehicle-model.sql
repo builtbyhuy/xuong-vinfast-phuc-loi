@@ -72,4 +72,4 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION process_vehicle TO service_role;
+GRANT EXECUTE ON FUNCTION process_vehicle(TEXT, TEXT, TIMESTAMPTZ, TEXT, INTEGER, TEXT) TO service_role;

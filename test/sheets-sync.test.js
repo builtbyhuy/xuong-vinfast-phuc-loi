@@ -28,16 +28,22 @@ const mockLogger = {
   warn:  () => {},
   error: (_msg, meta) => { lastLoggedError = meta; },
 };
+const dashboardCalls = [];
+const mockDashboard = {
+  refreshDashboard: async (config) => { dashboardCalls.push(config); },
+};
 
 before(() => {
   require.cache[require.resolve('../src/sheets')] = { exports: mockSheets };
   require.cache[require.resolve('../src/logger')] = { exports: mockLogger };
+  require.cache[require.resolve('../src/sheets-dashboard')] = { exports: mockDashboard };
 });
 
 after(() => {
   delete require.cache[require.resolve('../src/sheets-sync')];
   delete require.cache[require.resolve('../src/sheets')];
   delete require.cache[require.resolve('../src/logger')];
+  delete require.cache[require.resolve('../src/sheets-dashboard')];
 });
 
 const sheetsSync = require('../src/sheets-sync');
@@ -57,6 +63,8 @@ describe('sheets-sync — fire-and-forget guarantee', () => {
     mockSheets.archiveCompletedVehicle = async () => {};
     mockSheets.deleteMainRow           = async () => {};
     mockSheets.batchUpdatePriorities   = async () => {};
+    dashboardCalls.length = 0;
+    mockDashboard.refreshDashboard = async (config) => { dashboardCalls.push(config); };
   });
 
   it('syncVehicleIn — returns undefined synchronously (fire-and-forget)', () => {
@@ -70,14 +78,15 @@ describe('sheets-sync — fire-and-forget guarantee', () => {
     assert.equal(lastLoggedError, null);
   });
 
-  it('syncVehicleIn — swallows sheets error and logs it', async () => {
-    mockSheets.appendMainRow = async () => { throw new Error('Network timeout'); };
+  it('syncVehicleIn — avoids an append that the dashboard rewrite would replace', async () => {
+    let appendCalls = 0;
+    mockSheets.appendMainRow = async () => { appendCalls++; };
 
     sheetsSync.syncVehicleIn({ vehicleId: 'LX-002', plate: '51F1-99999' });
     await tick();
 
-    assert.ok(lastLoggedError, 'error must be logged');
-    assert.ok(lastLoggedError.error.includes('Network timeout'));
+    assert.equal(appendCalls, 0, 'new entries must be rendered by the dashboard, not appended twice');
+    assert.equal(lastLoggedError, null);
   });
 
   it('syncLogInsert — swallows sheets error', async () => {
@@ -138,12 +147,9 @@ describe('sheets-sync — fire-and-forget guarantee', () => {
     assert.equal(lastLoggedError, null);
   });
 
-  it('syncPrioritiesBatch — calls batchUpdatePriorities', async () => {
-    let batchCalled = false;
-    mockSheets.batchUpdatePriorities = async (changes) => {
-      batchCalled = true;
-      assert.equal(changes.length, 2);
-    };
+  it('syncPrioritiesBatch — leaves priority cells to the full dashboard rewrite', async () => {
+    let batchCalls = 0;
+    mockSheets.batchUpdatePriorities = async () => { batchCalls++; };
 
     sheetsSync.syncPrioritiesBatch([
       { plate: '30A-111', priority: 'Khẩn', updatedAt: '2026-03-28' },
@@ -151,16 +157,62 @@ describe('sheets-sync — fire-and-forget guarantee', () => {
     ]);
     await tick();
 
-    assert.ok(batchCalled);
+    assert.equal(batchCalls, 0, 'a separate priority write would be overwritten by the dashboard');
     assert.equal(lastLoggedError, null);
   });
 
-  it('syncPrioritiesBatch — swallows batch error', async () => {
-    mockSheets.batchUpdatePriorities = async () => { throw new Error('Quota exceeded'); };
+  it('syncDashboard — coalesces pending refreshes and uses the latest config', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const first = { timezone: 'UTC' };
+    const latest = { timezone: 'Asia/Ho_Chi_Minh' };
 
-    sheetsSync.syncPrioritiesBatch([{ plate: '30A-111', priority: 'Khẩn', updatedAt: '2026-03-28' }]);
-    await tick();
+    assert.equal(sheetsSync.syncDashboard(first), undefined);
+    sheetsSync.syncDashboard(latest);
+    t.mock.timers.tick(29_999);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dashboardCalls, [], 'must not refresh before the throttle window');
 
-    assert.ok(lastLoggedError);
+    t.mock.timers.tick(1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dashboardCalls, [latest]);
+    assert.ok(sheetsSync.getDashboardHealth() instanceof Date);
+    assert.equal(lastLoggedError, null);
+
+    sheetsSync.syncDashboard(first);
+    t.mock.timers.tick(30_000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dashboardCalls, [latest, first], 'a completed refresh must not block the next window');
+  });
+
+  it('syncDashboard — logs refresh failure without advancing successful health', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    sheetsSync.syncDashboardImmediate({ timezone: 'UTC' });
+    await new Promise(resolve => setImmediate(resolve));
+    const lastSuccess = sheetsSync.getDashboardHealth();
+    assert.ok(lastSuccess instanceof Date);
+    mockDashboard.refreshDashboard = async () => { throw new Error('Dashboard write failed'); };
+
+    sheetsSync.syncDashboard({ timezone: 'Asia/Ho_Chi_Minh' });
+    t.mock.timers.tick(30_000);
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(lastLoggedError.context, 'dashboard-refresh');
+    assert.match(lastLoggedError.error, /Dashboard write failed/);
+    assert.equal(sheetsSync.getDashboardHealth(), lastSuccess, 'a failure must not look like fresh reporting');
+  });
+
+  it('syncDashboardImmediate — cancels pending refresh and uses immediate config', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const pending = { timezone: 'UTC' };
+    const immediate = { timezone: 'Asia/Ho_Chi_Minh' };
+    sheetsSync.syncDashboard(pending);
+    assert.equal(sheetsSync.syncDashboardImmediate(immediate), undefined);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dashboardCalls, [immediate]);
+
+    t.mock.timers.tick(60_000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dashboardCalls, [immediate], 'cancelled pending work must not duplicate the immediate refresh');
+    assert.equal(lastLoggedError, null);
   });
 });

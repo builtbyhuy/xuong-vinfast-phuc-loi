@@ -1,135 +1,142 @@
-# Xuong Dich Vu VinFast Phuc Loi - He Thong Theo Doi Xe Vao/Ra
+# Vehicle Operations Workflow
 
-**Dia chi:** 55 Phuc Loi, Long Bien, Ha Noi
-**Hotline:** 0922 35 35 35
+**Telegram photo intake → plate extraction → PostgreSQL vehicle records → Google Sheets reporting.**
 
-He thong tu dong theo doi xe vao/ra xuong thong qua Telegram Bot + OCR bien so + Google Sheets.
+A Node.js workflow for recording vehicle entry and exit, handling uncertain
+plate readings, inspecting vehicles still on site and preparing operational
+reports. PostgreSQL is the source of truth. The spreadsheet is a reporting view,
+with its own refresh and failure handling.
 
----
+[Concurrency case study](docs/CASE-CONCURRENT-FIRST-ENTRY.md) ·
+[Database schema](supabase/schema.sql) ·
+[Guard instructions — Vietnamese](docs/guard-instructions.md)
 
-## Tinh Nang
+## Start with the engineering case
 
-- Ghi nhan xe vao/ra bang anh chup bien so qua Telegram
-- OCR tu dong nhan dang bien so Viet Nam (Google Cloud Vision)
-- Ghep cap xe vao/ra, tinh thoi gian luu xuong
-- Canh bao xe luu qua lau (24h canh bao, 48h khan)
-- Xem ton kho xe trong xuong qua Telegram hoac Google Sheets
-- Ghi chu thu cong cho xe luu qua 48h
-- Bao cao tu dong cuoi ngay cho quan ly
+Two simultaneous photos of a plate with no active record could create two
+entries: `SELECT FOR UPDATE` had no row to lock. The fix takes a transaction lock
+for the plate before its lookup, while retaining the existing entry, duplicate
+and exit decisions.
 
----
+The [real PostgreSQL case](docs/CASE-CONCURRENT-FIRST-ENTRY.md) reproduces the
+original failure through two database connections and a controlled insert
+barrier. Five baseline rounds each create two active entries; the fixed function
+preserves one entry under the same interleaving. Fresh-schema and migration
+checks also cover independent plates, rollback, threshold boundaries and same-day
+exit/re-entry. The [JSON evidence](docs/evidence/first-entry-fixed-upgrade.json)
+contains actual actions, row counts, waits and source hashes.
 
-## Kien Truc He Thong
+## The workflow
 
-```
-Bao ve (Telegram)                Server (Node.js)                Google Sheets
-+------------+    Webhook     +----------------------+         +----------------+
-| Gui anh    |--------------->|  /webhook/telegram   |         | DANH SACH CHINH|
-| + VAO/RA   |                |  +- OCR (Vision API) |-------->| NHAT KY        |
-|            |<---------------|  +- Business logic   |         | CAN KIEM TRA   |
-| Nhan TL    |  Telegram API  |  +- Reply Telegram   |         +----------------+
-+------------+                +----------------------+
-                                       |
-                              Google Cloud Vision API
-```
+1. A guard sends a vehicle photo through Telegram.
+2. A Poe-compatible vision endpoint extracts the plate and vehicle model.
+3. Validation sends missing, low-confidence or invalid readings to a review path.
+4. The application records the event and calls the PostgreSQL vehicle-decision
+   function. Its configurable minimum-stay threshold distinguishes a burst
+   duplicate from an exit.
+5. Database changes are mirrored to Google Sheets. A mirror failure is logged
+   separately from the operational write.
+6. Telegram commands, dashboard views and scheduled reports expose the records
+   to the people using the workflow. Deterministic report rules remain separate
+   from optional AI narrative generation and its fallback.
 
----
-
-## Cac Lenh Telegram
-
-| Lenh | Mo ta |
-|------|-------|
-| `VAO` + anh | Ghi nhan xe vao xuong |
-| `RA` + anh | Ghi nhan xe ra xuong |
-| `TONKHO` | Xem danh sach xe dang trong xuong |
-| `GHICHU 30A-12345 \| Ly do` | Them ghi chu cho xe |
-| `HELP` | Xem huong dan |
-
----
-
-## Cau Truc Thu Muc
-
-```
-src/
-+-- server.js        # Express server, Telegram webhook
-+-- config.js        # Doc ENV, validate config
-+-- logger.js        # Winston logger
-+-- telegram.js      # Telegram Bot API
-+-- ocr.js           # Google Cloud Vision - nhan dang bien so
-+-- sheets.js        # Google Sheets API - CRUD 3 tab
-+-- matcher.js       # Logic nghiep vu: VAO/RA, TONKHO, GHICHU, alerts
-+-- utils.js         # ID gen, time format, plate normalize, message parse
-+-- scripts/
-    +-- check-alerts.js  # Script chay cron kiem tra canh bao
-test/
-+-- utils.test.js    # Unit tests
+```mermaid
+flowchart TD
+  Telegram[Telegram webhook] --> OCR[Poe-compatible plate extraction]
+  OCR --> Validation[Validation and review]
+  Validation --> App[Node.js event handling]
+  Telegram -->|Commands| App
+  App --> DB[Supabase PostgreSQL records]
+  DB --> Mirror[Google Sheets mirror and dashboard]
+  DB --> Reports[Telegram responses and reports]
 ```
 
-## Bien Moi Truong (ENV)
+## Run the application
 
-| Bien | Bat buoc | Mo ta |
-|------|----------|-------|
-| `TELEGRAM_BOT_TOKEN` | Co | Token Telegram Bot (lay tu @BotFather) |
-| `TELEGRAM_WEBHOOK_URL` | Khong | URL server de tu dong set webhook |
-| `GOOGLE_SHEET_ID` | Co | ID Google Sheet |
-| `GOOGLE_CREDENTIALS_JSON` | Co | Service Account credentials (JSON string) |
-| `GOOGLE_VISION_CREDENTIALS_JSON` | Khong | Credentials rieng cho Vision API |
-| `ALERT_HOURS_WARNING` | Khong | Gio canh bao (mac dinh: 24) |
-| `ALERT_HOURS_URGENT` | Khong | Gio khan (mac dinh: 48) |
-| `MANAGER_CHAT_IDS` | Khong | Telegram chat ID quan ly |
-| `DAILY_REPORT_HOUR` | Khong | Gio gui bao cao tu dong (mac dinh: 18) |
+Use Node.js compatible with the locked dependencies and npm. Install the locked
+tree without package lifecycle scripts:
 
-## Huong Dan Cai Dat
-
-### 1. Tao Telegram Bot
-
-1. Mo Telegram, tim `@BotFather`
-2. Gui `/newbot`, dat ten bot
-3. Copy token (VD: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-4. Them bot vao group bao ve (hoac chat truc tiep)
-
-### 2. Chuan bi Google Cloud
-
-1. Tao project tren Google Cloud Console
-2. Bat **Google Sheets API** + **Cloud Vision API**
-3. Tao Service Account, tai JSON key
-4. Share Google Sheet cho email Service Account (Editor)
-
-### 3. Chay
-
-```bash
-npm install
+```sh
+npm ci --ignore-scripts
 cp .env.example .env
-# Sua file .env voi thong tin thuc
-
-npm start        # Production
-npm run dev      # Development (hot-reload)
-npm test         # Chay tests
 ```
 
-### 4. Deploy (Render / Railway)
+Fill in the required settings in `.env`:
 
-1. Ket noi GitHub repo
-2. Build Command: `npm install`
-3. Start Command: `npm start`
-4. Them ENV vars trong dashboard
+| Setting | Purpose |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Bot credentials for intake and responses |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | Privileged server connection to the operational database |
+| `POE_API_KEY` | Plate-extraction provider credentials |
+| `GOOGLE_SHEET_ID`, `GOOGLE_CREDENTIALS_JSON` | Spreadsheet and service-account credentials for reporting |
 
-## API Endpoints
+`src/config.js` is the configuration contract. The current OCR implementation is
+[`src/ocr.js`](src/ocr.js); it uses a Poe-compatible chat-completions endpoint,
+with `POE_OCR_MODEL` and optional `POE_API_ENDPOINT` settings. It does not use
+Google Cloud Vision.
 
-| Method | URL | Mo ta |
-|--------|-----|-------|
-| GET | `/health` | Health check |
-| POST | `/webhook/telegram` | Telegram webhook |
-| POST | `/admin/check-alerts` | Trigger kiem tra canh bao |
-| POST | `/admin/daily-report` | Trigger bao cao tong hop |
+For a new database, review and apply `supabase/schema.sql` in the intended
+Supabase project. For an existing database, use the ordered migration path and
+review [migration 003](supabase/migrations/003-lock-plate-before-lookup.sql), which
+also resolves the obsolete RPC overload. It does not delete or repair vehicle
+records. The [database case](docs/CASE-CONCURRENT-FIRST-ENTRY.md#migration-behavior-matters-too)
+explains dependency handling and the supported isolation contract.
 
-## Google Sheets - 3 Tab
+Configure `TELEGRAM_WEBHOOK_SECRET` and `ADMIN_API_KEY`. Set
+`TELEGRAM_WEBHOOK_URL` to the public server origin when you intend the application
+to register its webhook. Then:
 
-### DANH SACH CHINH
-Ma luot xe | Bien so | Gio vao | Gio ra | Luu (phut) | Anh vao | Anh ra | Trang thai | Muc uu tien | Ghi chu | Cap nhat luc
+```sh
+npm start
+```
 
-### NHAT KY
-Ma su kien | Thoi diem | Loai | Bien so (AI) | Chat luong | Anh | Nguoi gui | Tin nhan goc | Ket qua
+The application uses the configured providers and starts its periodic jobs.
+For an isolated engineering check with no provider credentials or messages, use
+the real-database test below instead.
 
-### CAN KIEM TRA
-Ma loi | Ma su kien | Thoi diem | Anh | Bien so (AI) | Ly do | Huong xu ly | Trang thai | Ghi chu
+## Check the behavior
+
+### Node.js regression suite
+
+```sh
+npm test
+```
+
+The existing suite covers application helpers, mocked database/adapter behavior
+and report paths. Database mocks do not establish PostgreSQL locking behavior.
+
+### Real PostgreSQL concurrency check
+
+Use Python 3, libpq and a disposable local PostgreSQL instance. Set the usual
+`PGHOST`, `PGPORT`, `PGUSER` and `PGDATABASE` environment variables for a test
+administrator with `CREATEDB`; the cluster must contain the schema's
+`service_role` role.
+
+```sh
+python3 test/postgres-concurrency.py --json fixed-schema.json
+python3 test/postgres-concurrency.py --upgrade --json fixed-upgrade.json
+```
+
+The harness creates a uniquely named disposable database and drops that exact
+database after the check. It exercises the production SQL through separate real
+connections. [The case study](docs/CASE-CONCURRENT-FIRST-ENTRY.md#run-against-your-own-disposable-local-postgresql)
+includes the expected-failure command for the original function and the full
+observed results.
+
+## Source map
+
+| Area | Source |
+| --- | --- |
+| Startup, webhook, routes and jobs | [`src/server.js`](src/server.js) |
+| Validated configuration | [`src/config.js`](src/config.js) |
+| Plate extraction | [`src/ocr.js`](src/ocr.js) |
+| Vehicle events and review paths | [`src/matcher.js`](src/matcher.js) |
+| Operational database adapter | [`src/db.js`](src/db.js) |
+| Spreadsheet reporting mirror | [`src/sheets-sync.js`](src/sheets-sync.js) |
+| Vehicle decision and migration history | [`supabase/`](supabase/) |
+| Real database regression | [`test/postgres-concurrency.py`](test/postgres-concurrency.py) |
+| Guard workflow | [`docs/guard-instructions.md`](docs/guard-instructions.md) |
+
+The concurrency case was developed and checked with AI assistance. Its scope is
+the local PostgreSQL RPC and surrounding database invariants; the case retains
+the original failing behavior beside the checked fix.
