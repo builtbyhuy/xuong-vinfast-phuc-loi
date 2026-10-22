@@ -1,0 +1,254 @@
+{
+  "format": "vehicle-postgres-regression",
+  "version": 1,
+  "checkedAt": "2026-10-22T03:16:30.536435+00:00",
+  "database": "vehicle_regression_8f52030fed7841fda7cf8847fe428f98",
+  "mode": "fresh-schema",
+  "serverVersion": "16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+  "baselineFunction": "test/fixtures/process-vehicle-before-plate-lock.sql",
+  "scope": "synthetic local PostgreSQL RPC and constraint behavior; no external services",
+  "installedFunctionSha256": "5addf30728063122b7cbb1d52507ce4296ec30110fa7f3c96b5a32b4eefcda69",
+  "sourceSha256": {
+    "test/postgres-concurrency.py": "04d4622eb8c4fb7894eea0c46ac060bfb898517d3e849c2e24d456b34ed51562",
+    "supabase/schema.sql": "ec82452872cefd159ff63b91fd27cc3aef52fe69af2a70c37a7bec049733cc67",
+    "supabase/migrations/002-add-vehicle-model.sql": "fc5e46aa770400f985aa9187c73055b8a1900ac852c8ed6c3be4c45dfdda1f8e",
+    "supabase/migrations/003-lock-plate-before-lookup.sql": "06fb99823f1c6962bd43ccac61b290be0d4d99faf3cfec9a556acf17ade10f32",
+    "test/fixtures/process-vehicle-before-plate-lock.sql": "c067d4c972270c53916f36378e22430ca85e7378e2c25cbd5165689a6851f958"
+  },
+  "firstEntryRace": {
+    "pass": false,
+    "rounds": [
+      {
+        "iteration": 1,
+        "waits": [
+          [
+            "vehicle-race-0-1",
+            "Lock",
+            "advisory"
+          ],
+          [
+            "vehicle-race-0-2",
+            "Lock",
+            "advisory"
+          ]
+        ],
+        "advisoryLocks": [
+          [
+            "vehicle-race-0-1",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ],
+          [
+            "vehicle-race-0-2",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ]
+        ],
+        "results": [
+          [
+            "VAO",
+            "race-0-0",
+            "0"
+          ],
+          [
+            "VAO",
+            "race-0-1",
+            "0"
+          ]
+        ],
+        "activeRows": 2
+      },
+      {
+        "iteration": 2,
+        "waits": [
+          [
+            "vehicle-race-1-1",
+            "Lock",
+            "advisory"
+          ],
+          [
+            "vehicle-race-1-2",
+            "Lock",
+            "advisory"
+          ]
+        ],
+        "advisoryLocks": [
+          [
+            "vehicle-race-1-1",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ],
+          [
+            "vehicle-race-1-2",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ]
+        ],
+        "results": [
+          [
+            "VAO",
+            "race-1-0",
+            "0"
+          ],
+          [
+            "VAO",
+            "race-1-1",
+            "0"
+          ]
+        ],
+        "activeRows": 2
+      },
+      {
+        "iteration": 3,
+        "waits": [
+          [
+            "vehicle-race-2-1",
+            "Lock",
+            "advisory"
+          ],
+          [
+            "vehicle-race-2-2",
+            "Lock",
+            "advisory"
+          ]
+        ],
+        "advisoryLocks": [
+          [
+            "vehicle-race-2-1",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ],
+          [
+            "vehicle-race-2-2",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ]
+        ],
+        "results": [
+          [
+            "VAO",
+            "race-2-0",
+            "0"
+          ],
+          [
+            "VAO",
+            "race-2-1",
+            "0"
+          ]
+        ],
+        "activeRows": 2
+      },
+      {
+        "iteration": 4,
+        "waits": [
+          [
+            "vehicle-race-3-1",
+            "Lock",
+            "advisory"
+          ],
+          [
+            "vehicle-race-3-2",
+            "Lock",
+            "advisory"
+          ]
+        ],
+        "advisoryLocks": [
+          [
+            "vehicle-race-3-1",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ],
+          [
+            "vehicle-race-3-2",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ]
+        ],
+        "results": [
+          [
+            "VAO",
+            "race-3-0",
+            "0"
+          ],
+          [
+            "VAO",
+            "race-3-1",
+            "0"
+          ]
+        ],
+        "activeRows": 2
+      },
+      {
+        "iteration": 5,
+        "waits": [
+          [
+            "vehicle-race-4-1",
+            "Lock",
+            "advisory"
+          ],
+          [
+            "vehicle-race-4-2",
+            "Lock",
+            "advisory"
+          ]
+        ],
+        "advisoryLocks": [
+          [
+            "vehicle-race-4-1",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ],
+          [
+            "vehicle-race-4-2",
+            "advisory",
+            "2147483000",
+            "1",
+            "2",
+            "false"
+          ]
+        ],
+        "results": [
+          [
+            "VAO",
+            "race-4-0",
+            "0"
+          ],
+          [
+            "VAO",
+            "race-4-1",
+            "0"
+          ]
+        ],
+        "activeRows": 2
+      }
+    ]
+  },
+  "pass": false
+}

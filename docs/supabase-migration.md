@@ -1,6 +1,9 @@
 # Supabase Migration Guide — VinFast Bot Setup
 
-**Status:** ✅ All files ready for deployment
+**Current correction:** apply and review migration 003 for the per-plate RPC lock.
+The [real PostgreSQL concurrency case](CASE-CONCURRENT-FIRST-ENTRY.md) records
+the original failure, checked fix and upgrade behavior. This guide is not proof
+that a particular database has received the migration.
 
 ---
 
@@ -30,11 +33,14 @@ Google Sheets ← Read-only mirror for humans
 Contains:
 - 3 tables: `vehicles`, `events`, `reviews`
 - Intelligent indexes for fast lookups
-- `process_vehicle()` RPC function with race-condition safety
+- `process_vehicle()` RPC function for vehicle-state decisions
 - Full SQL comments explaining each column and index
 - Ready to copy-paste into Supabase SQL editor
 
-**Key feature:** The RPC uses `SELECT FOR UPDATE` to serialize concurrent burst photos at the database level. No in-process mutex needed.
+**Lock boundary:** `SELECT FOR UPDATE` alone does not protect a first entry when
+there is no active row. Migration 003 takes a per-plate transaction advisory lock
+before the lookup, then retains the row lock. Its checked contract is READ
+COMMITTED for callers of this RPC; direct table writes need separate coordination.
 
 ### 2. Setup Guide Updated
 **Location:** `SETUP_GUIDE.md`
@@ -103,8 +109,8 @@ Before running the bot, you need to:
 
 ### Step 3: **NEW — Create Supabase** ⭐
 3. Create free Supabase project
-4. Copy migration from `supabase/migrations/001-init-schema.sql`
-5. Paste in Supabase SQL editor → Run
+4. For a new empty database, use the current `supabase/schema.sql` snapshot.
+5. For an existing installation, review and apply only the outstanding migrations in order: `001` → `002` → `003`. Migration `003` installs the plate lock and removes the obsolete five-argument overload; do not rerun `001` after it. See [the concurrency case](CASE-CONCURRENT-FIRST-ENTRY.md) for the tested upgrade path.
 6. Get `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 
 ### Step 4-5: Google Setup (Same as before)

@@ -11,9 +11,9 @@ const logger     = require('./logger');
 /**
  * Xu ly 1 su kien xe vao/ra.
  *
- * Race-condition-free: the DB's process_vehicle() RPC uses SELECT FOR UPDATE
- * to serialize concurrent burst photos for the same plate at the PostgreSQL
- * level. No in-process mutex needed.
+ * The DB's process_vehicle() RPC takes a transaction lock for the plate before
+ * its active-row lookup (migration 003). This also covers concurrent first
+ * entries; SELECT FOR UPDATE alone cannot lock an absent row.
  */
 async function processVehicleEvent(event, config) {
   const tz  = config.timezone;
@@ -127,7 +127,7 @@ async function processVehicleEvent(event, config) {
     }
   }
 
-  // ── Step 3: Atomic VAO/RA decision (PostgreSQL RPC with SELECT FOR UPDATE) ─
+  // ── Step 3: VAO/RA decision (PostgreSQL RPC with a per-plate transaction lock) ─
 
   const minWorkshopSecs = config.alerts.minWorkshopMinutes * 60;
   let decision;

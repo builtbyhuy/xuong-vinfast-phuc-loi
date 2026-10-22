@@ -6,9 +6,10 @@
  * Replaces Google Sheets as the operational database. Sheets is now an async
  * read-only mirror maintained by sheets-sync.js.
  *
- * Key guarantee: process_vehicle() RPC uses SELECT FOR UPDATE inside a
- * PL/pgSQL transaction → concurrent burst photos for the same plate are
- * serialized at the DB level. No in-process mutex needed.
+ * process_vehicle() uses a per-plate transaction advisory lock before looking
+ * up the active row, then SELECT FOR UPDATE. Apply migration 003 for existing
+ * databases. This coordinates RPC callers at READ COMMITTED, including a plate
+ * without an active row; it does not serialize unrelated direct table writes.
  */
 
 const { createClient } = require('@supabase/supabase-js');

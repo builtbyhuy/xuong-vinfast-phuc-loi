@@ -83,9 +83,9 @@ CREATE INDEX IF NOT EXISTS idx_reviews_timestamp     ON reviews (timestamp);
 -- process_vehicle RPC
 --
 -- Atomically decides whether an incoming photo is a VAO (entry) or RA (exit).
--- Uses SELECT FOR UPDATE inside a PL/pgSQL transaction to serialize concurrent
--- calls for the same plate — eliminates the burst-photo race condition at the
--- DB level without any in-process mutex.
+-- A transaction-scoped advisory lock serializes this RPC for one plate before
+-- its lookup, including first entry when there is no row to lock. FOR UPDATE
+-- retains the active-row lock. The RPC uses PostgreSQL's READ COMMITTED default.
 --
 -- Returns one row:
 --   action      TEXT  -- 'VAO' | 'RA' | 'RA_DUPLICATE'
@@ -114,8 +114,15 @@ DECLARE
   v_row    vehicles%ROWTYPE;
   v_secs   NUMERIC;
 BEGIN
-  -- Lock the active row for this plate (if any).
-  -- Concurrent calls for the same plate block here until the first completes.
+  -- Row locks cannot protect a plate that has no active row yet. Lock its key
+  -- before the lookup; release is automatic on transaction commit or rollback.
+  -- Separate statements let the lookup see a preceding commit after waiting
+  -- under READ COMMITTED. Writers bypassing this RPC must coordinate separately.
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('vehicle-workflow:process_vehicle:' || p_plate, 0)
+  );
+
+  -- Lock the active row for this plate, if one exists after the plate lock.
   SELECT * INTO v_row
   FROM vehicles
   WHERE plate = p_plate
@@ -162,4 +169,4 @@ END;
 $$;
 
 -- Grant execute to the service role (used by the bot's service key)
-GRANT EXECUTE ON FUNCTION process_vehicle TO service_role;
+GRANT EXECUTE ON FUNCTION process_vehicle(TEXT, TEXT, TIMESTAMPTZ, TEXT, INTEGER, TEXT) TO service_role;

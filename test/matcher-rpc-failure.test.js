@@ -47,7 +47,7 @@ const dbStub = {
 };
 require.cache[require.resolve('../src/db')] = { exports: dbStub };
 
-const syncCalls = { logResult: [] };
+const syncCalls = { logResult: [], dashboard: [] };
 require.cache[require.resolve('../src/sheets-sync')] = {
   exports: {
     syncLogInsert:    () => {},
@@ -55,6 +55,7 @@ require.cache[require.resolve('../src/sheets-sync')] = {
     syncReviewInsert: () => {},
     syncVehicleIn:    () => {},
     syncVehicleOut:   () => {},
+    syncDashboard:    (config) => syncCalls.dashboard.push(config),
   },
 };
 
@@ -102,6 +103,7 @@ describe('matcher.processVehicleEvent — RPC failure hardening', () => {
     logCalls.info.length  = 0;
     logCalls.error.length = 0;
     syncCalls.logResult.length = 0;
+    syncCalls.dashboard.length = 0;
     dbStub.insertEvent = async () => {};
     dbStub.processVehicleDecision = async () => {
       if (dbStub._rpcError) throw new Error(dbStub._rpcError);
@@ -117,6 +119,7 @@ describe('matcher.processVehicleEvent — RPC failure hardening', () => {
     assert.equal(result.success, false);
     assert.match(result.replyMessage, /Vui lòng gửi lại ảnh/);
     assert.match(result.replyMessage, /30A-12345/);
+    assert.deepEqual(syncCalls.dashboard, [], 'failed decisions must not refresh the success dashboard');
   });
 
   it('marks event as error state in DB when RPC throws', async () => {
@@ -162,19 +165,21 @@ describe('matcher.processVehicleEvent — RPC failure hardening', () => {
     assert.equal(dupLog[1].secondsInWorkshop, 45);
   });
 
-  it('uses config.alerts.minWorkshopMinutes directly (no || 15 override)', async () => {
-    // Config with 5 minutes — if || 15 existed, it would only affect falsy values.
-    // This test ensures config value 5 is used, not silently overridden.
-    const cfg5 = { ...baseConfig, alerts: { ...baseConfig.alerts, minWorkshopMinutes: 5 } };
-    let capturedSecs;
-    dbStub.processVehicleDecision = async (_plate, _vid, _now, _img, secs) => {
-      capturedSecs = secs;
-      return { action: 'VAO', vehicle_id: 'LX-X', time_in_ts: new Date().toISOString(), seconds_in: 0 };
-    };
+  it('uses explicit nonzero and zero minWorkshopMinutes without a fallback override', async () => {
+    // A falsy zero is the case that would expose an accidental `|| 15` fallback.
+    for (const minutes of [5, 0]) {
+      const config = { ...baseConfig, alerts: { ...baseConfig.alerts, minWorkshopMinutes: minutes } };
+      let capturedSecs;
+      dbStub.processVehicleDecision = async (_plate, _vid, _now, _img, secs) => {
+        capturedSecs = secs;
+        return { action: 'VAO', vehicle_id: 'LX-X', time_in_ts: new Date().toISOString(), seconds_in: 0 };
+      };
 
-    await processVehicleEvent(goodEvent, cfg5);
+      await processVehicleEvent(goodEvent, config);
 
-    assert.equal(capturedSecs, 5 * 60, 'should pass 300s (5 min), not 900s (15 min)');
+      assert.equal(capturedSecs, minutes * 60, `must preserve the explicit ${minutes}-minute setting`);
+    }
+    assert.equal(syncCalls.dashboard.length, 2);
   });
 });
 
@@ -185,6 +190,7 @@ describe('matcher.processVehicleEvent — nested failure in RPC error path', () 
     logCalls.info.length  = 0;
     logCalls.error.length = 0;
     syncCalls.logResult.length = 0;
+    syncCalls.dashboard.length = 0;
     dbStub.insertEvent = async () => {};
     // Default: RPC always fails, updateEventResult succeeds
     dbStub.processVehicleDecision = async () => { throw new Error('deadlock'); };
@@ -248,5 +254,6 @@ describe('matcher.processVehicleEvent — nested failure in RPC error path', () 
 
     assert.equal(result.success, true);
     assert.match(result.replyMessage, /VÀO xưởng/);
+    assert.deepEqual(syncCalls.dashboard, [baseConfig]);
   });
 });

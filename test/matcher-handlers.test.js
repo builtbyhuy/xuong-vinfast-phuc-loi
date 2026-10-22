@@ -59,6 +59,7 @@ const sheetsMock = {
   syncReviewInsert: () => {},
   syncPrioritiesBatch: () => {},
   syncDailyReport: () => {},
+  syncDashboard: () => {},
 };
 
 // ── Mock Telegram ───────────────────────────────────────────────────────────
@@ -321,6 +322,8 @@ describe('matcher.handleMorningBriefing', () => {
 
 describe('matcher.processVehicleEvent - VAO', () => {
   it('processes a valid VAO event', async () => {
+    const dashboardConfigs = [];
+    sheetsMock.syncDashboard = (cfg) => dashboardConfigs.push(cfg);
     dbMock.processVehicleDecision = async () => ({
       action: 'VAO', vehicle_id: 'LX-TEST', time_in_ts: new Date().toISOString(), seconds_in: 0,
     });
@@ -337,6 +340,7 @@ describe('matcher.processVehicleEvent - VAO', () => {
     assert.ok(result.replyMessage.includes('VÀO'));
     assert.ok(result.replyMessage.includes('30A-12345'));
     assert.ok(result.replyMessage.includes('VF 8'));
+    assert.deepEqual(dashboardConfigs, [config], 'committed entry must request the dashboard replacement path');
   });
 });
 
@@ -388,6 +392,8 @@ describe('matcher.processVehicleEvent - OCR failures', () => {
 
 describe('matcher.processVehicleEvent - RA', () => {
   it('processes a valid RA event', async () => {
+    const dashboardConfigs = [];
+    sheetsMock.syncDashboard = (cfg) => dashboardConfigs.push(cfg);
     dbMock.processVehicleDecision = async () => ({
       action: 'RA', vehicle_id: 'LX-002', time_in_ts: new Date(Date.now() - 7200000).toISOString(), seconds_in: 7200,
     });
@@ -402,6 +408,7 @@ describe('matcher.processVehicleEvent - RA', () => {
     assert.equal(result.success, true);
     assert.ok(result.replyMessage.includes('RA'));
     assert.ok(result.replyMessage.includes('Thời gian lưu'));
+    assert.deepEqual(dashboardConfigs, [config], 'committed exit must request the dashboard replacement path');
   });
 });
 
